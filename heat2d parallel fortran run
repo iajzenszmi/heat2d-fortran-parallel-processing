@@ -1,0 +1,142 @@
+(base) ian-martin-ajzenszmidt@ian-martin-ajzenszmidt-CFSZ5-3:~/Downloads/heat2d_parallel$ cat main.f90
+program heat2d
+  use mpi
+  use heat_solver
+  use utils
+  implicit none
+
+  integer :: ierr, rank, size, i
+  integer :: nx_global = 100, ny = 100, steps = 500
+  real(8), allocatable :: T(:,:), Tnew(:,:)
+
+  call MPI_Init(ierr)
+  call MPI_Comm_rank(MPI_COMM_WORLD, rank, ierr)
+  call MPI_Comm_size(MPI_COMM_WORLD, size, ierr)
+
+  call allocate_grid(nx_global, ny, rank, size, T, Tnew)
+  call initialize(T, rank)
+
+  do i = 1, steps
+     call update_heat(T, Tnew, nx_global/size, ny)
+     call swap(T, Tnew)
+     if (mod(i,50)==0 .and. rank==0) print *, 'Step:', i
+  end do
+
+  call finalize_grid(T, Tnew)
+  call MPI_Finalize(ierr)
+end program
+(base) ian-martin-ajzenszmidt@ian-martin-ajzenszmidt-CFSZ5-3:~/Downloads/heat2d_parallel$ cat heat_solver.f90
+module heat_solver
+  implicit none
+contains
+  subroutine update_heat(T, Tnew, nx, ny)
+    real(8), intent(in) :: T(:,:)
+    real(8), intent(out) :: Tnew(:,:)
+    integer, intent(in) :: nx, ny
+    integer :: i, j
+
+    !$omp parallel do private(i,j) shared(T,Tnew)
+    do i = 2, nx-1
+      do j = 2, ny-1
+        Tnew(i,j) = 0.25d0 * (T(i-1,j) + T(i+1,j) + T(i,j-1) + T(i,j+1))
+      end do
+    end do
+    !$omp end parallel do
+  end subroutine
+
+  subroutine swap(A, B)
+    real(8), allocatable, intent(inout) :: A(:,:), B(:,:)
+    real(8), allocatable :: tmp(:,:)
+
+    allocate(tmp(size(A,1), size(A,2)))
+    tmp = A
+    A = B
+    B = tmp
+    deallocate(tmp)
+  end subroutine
+end module
+(base) ian-martin-ajzenszmidt@ian-martin-ajzenszmidt-CFSZ5-3:~/Downloads/heat2d_parallel$ cat utils.f90
+module utils
+  implicit none
+contains
+  subroutine allocate_grid(nx_global, ny, rank, size, T, Tnew)
+    integer, intent(in) :: nx_global, ny, rank, size
+    real(8), allocatable, intent(out) :: T(:,:), Tnew(:,:)
+    integer :: nx_local
+
+    nx_local = nx_global / size + 2
+    allocate(T(nx_local, ny+2))
+    allocate(Tnew(nx_local, ny+2))
+    T = 0.0d0
+    Tnew = 0.0d0
+  end subroutine
+
+  subroutine initialize(T, rank)
+    real(8), intent(inout) :: T(:,:)
+    integer, intent(in) :: rank
+    if (rank == 0) T(size(T,1)/2, size(T,2)/2) = 100.0d0
+  end subroutine
+
+  subroutine finalize_grid(T, Tnew)
+    real(8), allocatable, intent(inout) :: T(:,:), Tnew(:,:)
+    deallocate(T)
+    deallocate(Tnew)
+  end subroutine
+end module
+(base) ian-martin-ajzenszmidt@ian-martin-ajzenszmidt-CFSZ5-3:~/Downloads/heat2d_parallel$ ls
+heat2d           heat_solver.mod  main.f90  Makefile   utils.f90  utils.o
+heat_solver.f90  heat_solver.o    main.o    README.md  utils.mod
+(base) ian-martin-ajzenszmidt@ian-martin-ajzenszmidt-CFSZ5-3:~/Downloads/heat2d_parallel$ cat utils.f90
+module utils
+  implicit none
+contains
+  subroutine allocate_grid(nx_global, ny, rank, size, T, Tnew)
+    integer, intent(in) :: nx_global, ny, rank, size
+    real(8), allocatable, intent(out) :: T(:,:), Tnew(:,:)
+    integer :: nx_local
+
+    nx_local = nx_global / size + 2
+    allocate(T(nx_local, ny+2))
+    allocate(Tnew(nx_local, ny+2))
+    T = 0.0d0
+    Tnew = 0.0d0
+  end subroutine
+
+  subroutine initialize(T, rank)
+    real(8), intent(inout) :: T(:,:)
+    integer, intent(in) :: rank
+    if (rank == 0) T(size(T,1)/2, size(T,2)/2) = 100.0d0
+  end subroutine
+
+  subroutine finalize_grid(T, Tnew)
+    real(8), allocatable, intent(inout) :: T(:,:), Tnew(:,:)
+    deallocate(T)
+    deallocate(Tnew)
+  end subroutine
+end module
+(base) ian-martin-ajzenszmidt@ian-martin-ajzenszmidt-CFSZ5-3:~/Downloads/heat2d_parallel$ cat Makefile
+FC = mpif90
+FFLAGS = -O3 -fopenmp
+
+all: heat2d
+
+heat2d: main.o heat_solver.o utils.o
+	$(FC) $(FFLAGS) -o heat2d main.o heat_solver.o utils.o
+
+%.o: %.f90
+	$(FC) $(FFLAGS) -c $<
+
+clean:
+	rm -f *.o *.mod heat2d
+(base) ian-martin-ajzenszmidt@ian-martin-ajzenszmidt-CFSZ5-3:~/Downloads/heat2d_parallel$ mpirun -np 2 ./heat2d
+ Step:          50
+ Step:         100
+ Step:         150
+ Step:         200
+ Step:         250
+ Step:         300
+ Step:         350
+ Step:         400
+ Step:         450
+ Step:         500
+(base) ian-martin-ajzenszmidt@ian-martin-ajzenszmidt-CFSZ5-3:~/Downloads/heat2d_parallel$ 
